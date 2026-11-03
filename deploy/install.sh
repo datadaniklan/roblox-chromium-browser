@@ -51,8 +51,10 @@ EOF
 fi
 sed -i "s|^CHROME_PATH=.*|CHROME_PATH=$CHROME|" "$BASE/browser.env"
 grep -q "^COOKIE_FILE=" "$BASE/browser.env" || echo "COOKIE_FILE=$BASE/data/shared-cookies.json" >> "$BASE/browser.env"
-mkdir -p "$BASE/data"
-chown rbxbrowser:rbxbrowser "$BASE/data"
+mkdir -p "$BASE/data/players"
+# Cookie jars hold players' logins: only the service user may read them
+chown -R rbxbrowser:rbxbrowser "$BASE/data"
+chmod 700 "$BASE/data" "$BASE/data/players"
 
 cat > /etc/systemd/system/roblox-browser.service <<EOF
 [Unit]
