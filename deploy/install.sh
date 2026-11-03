@@ -68,6 +68,8 @@ EnvironmentFile=$BASE/browser.env
 ExecStart=/usr/bin/node server.mjs
 Restart=always
 RestartSec=3
+# Chromium ignores SIGTERM for a while; don't make restarts wait 90 s
+TimeoutStopSec=5
 # Stay out of Minecraft's way
 Nice=10
 MemoryMax=4G
