@@ -12,7 +12,7 @@ import path from "node:path";
 import puppeteer from "puppeteer-core";
 import sharp from "sharp";
 import { homeHtml, searchUrl, ENGINES } from "./home.mjs";
-import { AUDIO_TAP_JS, AUDIO_RATE, TONE_HTML, toneWav, noiseWav } from "./audio-tap.mjs";
+import { AUDIO_TAP_JS, AUDIO_RATE, TONE_HTML, toneWav } from "./audio-tap.mjs";
 import { startSocksRouter } from "./socks-router.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -42,7 +42,6 @@ const LONG_POLL_MS = 350;
 const AFTER_INPUT_MS = 120;
 const AUDIO_BATCH = 3; // ~100 ms of audio frames wakes a waiting /tick
 const TONE_WAV = toneWav();
-const NOISE_WAV = noiseWav();
 
 sharp.concurrency(1);
 sharp.cache(false);
@@ -418,10 +417,6 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/tone") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(TONE_HTML);
-    }
-    if (url.pathname === "/noise.wav") {
-      res.writeHead(200, { "content-type": "audio/wav" });
-      return res.end(NOISE_WAV);
     }
     if (url.pathname === "/tone.wav") {
       res.writeHead(200, { "content-type": "audio/wav" });
