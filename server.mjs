@@ -13,6 +13,7 @@ import puppeteer from "puppeteer-core";
 import sharp from "sharp";
 import { homeHtml, searchUrl, ENGINES } from "./home.mjs";
 import { AUDIO_TAP_JS, TONE_HTML, toneWav } from "./audio-tap.mjs";
+import { startSocksRouter } from "./socks-router.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
 const API_KEY = process.env.API_KEY || "";
@@ -26,19 +27,15 @@ const COOKIE_FILE = process.env.COOKIE_FILE || "";
 const SHARE_LOGIN = process.env.SHARE_LOGIN === "1";
 // PROXY_SOCKS=host:port sends Google/YouTube traffic through a SOCKS proxy (e.g. a reverse SSH
 // tunnel to a home connection), because they bot-wall datacenter IPs. Falls back to direct
-// whenever the proxy is down; every other site always goes direct.
+// whenever the proxy is down; every other site always goes direct. Chromium talks to a local
+// SOCKS router (socks-router.mjs) that makes that choice per host.
 const PROXY_SOCKS = process.env.PROXY_SOCKS || "";
+const ROUTER_PORT = PORT + 1;
 const PROXIED_DOMAINS = [
   "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "ggpht.com",
   "google.com", "google.de", "gstatic.com", "googleapis.com", "googleusercontent.com", "recaptcha.net",
 ];
-const PROXY_PAC = `function FindProxyForURL(url, host) {
-  var domains = ${JSON.stringify(PROXIED_DOMAINS)};
-  for (var i = 0; i < domains.length; i++) {
-    if (host === domains[i] || dnsDomainIs(host, "." + domains[i])) return "SOCKS5 ${PROXY_SOCKS}; DIRECT";
-  }
-  return "DIRECT";
-}`;
+if (PROXY_SOCKS) startSocksRouter({ port: ROUTER_PORT, upstream: PROXY_SOCKS, routed: PROXIED_DOMAINS });
 const TILE = 32;
 const HOME = `http://127.0.0.1:${PORT}/home`;
 const LONG_POLL_MS = 350;
@@ -67,7 +64,8 @@ async function getBrowser() {
       "--disable-extensions",
       "--disable-background-networking",
       "--lang=en-US",
-      ...(PROXY_SOCKS ? [`--proxy-pac-url=http://127.0.0.1:${PORT}/proxy.pac`] : []),
+      // The local home page is fetched directly; everything else goes through the router
+      ...(PROXY_SOCKS ? [`--proxy-server=socks5://127.0.0.1:${ROUTER_PORT}`, "--proxy-bypass-list=127.0.0.1;localhost"] : []),
       "--disable-site-isolation-trials",
       "--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter",
       "--disable-software-rasterizer",
@@ -415,10 +413,6 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(homeHtml(ENGINES[url.searchParams.get("e")] ? url.searchParams.get("e") : "duckduckgo"));
-    }
-    if (url.pathname === "/proxy.pac") {
-      res.writeHead(200, { "content-type": "application/x-ns-proxy-autoconfig" });
-      return res.end(PROXY_PAC);
     }
     if (url.pathname === "/tone") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
