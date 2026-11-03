@@ -24,7 +24,8 @@ apt-get clean
 
 mkdir -p "$BASE"
 if [ -d "$BASE/app/.git" ]; then
-  git -C "$BASE/app" pull -q --ff-only
+  # The checkout is owned by the service user, so tell git (running as root) to trust it
+  git -c safe.directory="$BASE/app" -C "$BASE/app" pull -q --ff-only
 else
   git clone -q "$REPO" "$BASE/app"
 fi
