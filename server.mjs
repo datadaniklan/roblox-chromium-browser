@@ -79,6 +79,9 @@ async function createSession(w, h) {
   const ctx = await b.createBrowserContext();
   const page = await ctx.newPage();
   await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
+  // Sites block "HeadlessChrome"; present as regular desktop Chrome
+  const ua = (await b.userAgent()).replace("HeadlessChrome", "Chrome");
+  await page.setUserAgent(ua);
   const id = crypto.randomUUID();
   const s = {
     id, ctx, page, w, h,
