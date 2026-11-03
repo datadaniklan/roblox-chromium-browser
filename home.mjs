@@ -10,15 +10,29 @@ const SHORTCUTS = [
   ["Zoom", "https://zoom.us/join", "zoom.us"],
 ];
 
+const favicon = (domain) => `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+
+// Search engines the home page can switch between; the server uses the same table for
+// address-bar searches. Google captchas datacenter IPs, so DuckDuckGo is the default.
+export const ENGINES = {
+  google: { action: "https://www.google.com/search", param: ["hl", "en"], icon: favicon("google.com") },
+  duckduckgo: { action: "https://duckduckgo.com/", param: ["kl", "us-en"], icon: favicon("duckduckgo.com") },
+};
+
+export function searchUrl(engine, query) {
+  const e = ENGINES[engine] || ENGINES.duckduckgo;
+  return `${e.action}?${e.param[0]}=${e.param[1]}&q=${encodeURIComponent(query)}`;
+}
+
 const tiles = SHORTCUTS.map(
   ([name, url, domain]) => `
     <a class="tile" href="${url}">
-      <span class="icon"><img src="https://www.google.com/s2/favicons?domain=${domain}&sz=64" alt=""></span>
+      <span class="icon"><img src="${favicon(domain)}" alt=""></span>
       <span class="name">${name}</span>
     </a>`
 ).join("");
 
-export const HOME_HTML = `<!doctype html>
+export const homeHtml = (engine) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -76,19 +90,51 @@ export const HOME_HTML = `<!doctype html>
   }
   .icon img { width: 28px; height: 28px; }
   .name { max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  .engines { display: flex; justify-content: center; gap: 10px; margin-top: 14px; }
+  .engine {
+    display: flex; align-items: center; gap: 8px; padding: 7px 16px 7px 10px;
+    border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: rgba(32, 33, 36, .7);
+    color: #e8eaed; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .engine img { width: 18px; height: 18px; }
+  .engine.on { background: #e8eaed; color: #202124; border-color: #e8eaed; }
 </style>
 </head>
 <body>
 <div class="clouds"></div>
 <main>
-  <form action="https://duckduckgo.com/" method="get">
-    <input type="hidden" name="kl" value="us-en">
+  <form id="search">
+    <input type="hidden" id="extra">
     <label class="search">
-      <img src="https://www.google.com/s2/favicons?domain=duckduckgo.com&sz=64" alt="">
+      <img id="engineIcon" alt="">
       <input name="q" placeholder="Search the web" autocomplete="off" autofocus>
     </label>
+    <div class="engines">
+      <button type="button" class="engine" data-engine="google"><img src="${favicon("google.com")}" alt="">Google</button>
+      <button type="button" class="engine" data-engine="duckduckgo"><img src="${favicon("duckduckgo.com")}" alt="">DuckDuckGo</button>
+    </div>
   </form>
   <nav class="tiles">${tiles}</nav>
 </main>
+<script>
+  const ENGINES = ${JSON.stringify(ENGINES)};
+  const form = document.getElementById("search");
+  function setEngine(name) {
+    const e = ENGINES[name] || ENGINES.duckduckgo;
+    form.action = e.action;
+    const extra = document.getElementById("extra");
+    extra.name = e.param[0];
+    extra.value = e.param[1];
+    document.getElementById("engineIcon").src = e.icon;
+    for (const b of document.querySelectorAll(".engine")) b.classList.toggle("on", b.dataset.engine === name);
+    // Tell the render server so address-bar searches use the same engine
+    if (window.__rbxSetEngine) window.__rbxSetEngine(name);
+    try { localStorage.setItem("engine", name); } catch (err) {}
+  }
+  for (const b of document.querySelectorAll(".engine")) b.onclick = () => setEngine(b.dataset.engine);
+  let saved = ${JSON.stringify(engine)};
+  try { saved = localStorage.getItem("engine") || saved; } catch (err) {}
+  setEngine(saved);
+</script>
 </body>
 </html>`;

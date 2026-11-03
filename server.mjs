@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import puppeteer from "puppeteer-core";
 import sharp from "sharp";
-import { HOME_HTML } from "./home.mjs";
+import { homeHtml, searchUrl, ENGINES } from "./home.mjs";
 import { AUDIO_TAP_JS, TONE_HTML, toneWav } from "./audio-tap.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -98,7 +98,11 @@ async function createSession(w, h) {
     sent: null, sentSeq: -1, // what the Roblox client already has
     waiters: [], lastUsed: Date.now(), busy: Promise.resolve(),
     audio: [], // pending audio frames (band levels + pitches) from the page tap
+    engine: "duckduckgo", // search engine picked on the home page
   };
+  await page.exposeFunction("__rbxSetEngine", (name) => {
+    if (ENGINES[name]) s.engine = name;
+  });
   await page.exposeFunction("__rbxAudio", (b64) => {
     s.audio.push(Buffer.from(String(b64), "base64"));
     if (s.audio.length > 30) s.audio.shift(); // nobody is polling; keep only the last second
@@ -193,14 +197,13 @@ setInterval(() => {
   for (const s of sessions.values()) if (now - s.lastUsed > IDLE_MS) closeSession(s.id);
 }, 10_000);
 
-function normalizeUrl(raw) {
+function normalizeUrl(raw, engine) {
   const t = String(raw || "").trim();
-  if (!t || t.toLowerCase() === "home") return HOME;
+  if (!t || t.toLowerCase() === "home") return `${HOME}?e=${engine}`;
   if (t.toLowerCase() === "sound test") return HOME.replace("/home", "/tone");
   if (/^[a-z]+:\/\//i.test(t)) return t;
   if (/^[^\s]+\.[^\s]{2,}$/.test(t)) return "https://" + t;
-  // Google captchas every search from datacenter IPs; DuckDuckGo doesn't
-  return "https://duckduckgo.com/?kl=us-en&q=" + encodeURIComponent(t);
+  return searchUrl(engine, t);
 }
 
 function publicUrl(url) {
@@ -229,7 +232,7 @@ async function applyEvents(s, events) {
     try {
       switch (e.t) {
         case "nav":
-          page.goto(normalizeUrl(e.url), { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
+          page.goto(normalizeUrl(e.url, s.engine), { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
           break;
         case "back": page.goBack({ timeout: 10_000 }).catch(() => {}); break;
         case "fwd": page.goForward({ timeout: 10_000 }).catch(() => {}); break;
@@ -352,7 +355,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/home") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end(HOME_HTML);
+      return res.end(homeHtml(ENGINES[url.searchParams.get("e")] ? url.searchParams.get("e") : "duckduckgo"));
     }
     if (url.pathname === "/tone") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
