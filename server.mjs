@@ -32,7 +32,8 @@ async function getBrowser() {
   if (browser?.connected) return browser;
   browser = await puppeteer.launch({
     executablePath: CHROME_PATH,
-    headless: true,
+    // chrome-headless-shell (lighter than full Chromium) needs the "shell" mode
+    headless: process.env.HEADLESS === "shell" ? "shell" : true,
     args: [
       "--no-sandbox",
       "--disable-dev-shm-usage",
