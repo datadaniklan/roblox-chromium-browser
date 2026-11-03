@@ -1,0 +1,17 @@
+{
+  "name": "roblox-chromium-browser",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "pngjs": "7.0.0",
+    "puppeteer-core": "24.10.0"
+  }
+}
