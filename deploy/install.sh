@@ -50,6 +50,9 @@ EOF
   chown root:root "$BASE/browser.env"
 fi
 sed -i "s|^CHROME_PATH=.*|CHROME_PATH=$CHROME|" "$BASE/browser.env"
+grep -q "^COOKIE_FILE=" "$BASE/browser.env" || echo "COOKIE_FILE=$BASE/data/shared-cookies.json" >> "$BASE/browser.env"
+mkdir -p "$BASE/data"
+chown rbxbrowser:rbxbrowser "$BASE/data"
 
 cat > /etc/systemd/system/roblox-browser.service <<EOF
 [Unit]
@@ -71,6 +74,8 @@ NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
+# IPv4 only: Google captchas datacenter IPv6 ranges far more often
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

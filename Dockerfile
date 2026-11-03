@@ -7,7 +7,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
-COPY server.mjs home.mjs ./
+COPY server.mjs home.mjs audio-tap.mjs ./
 
 ENV CHROME_PATH=/usr/bin/chromium
 ENV PORT=10000

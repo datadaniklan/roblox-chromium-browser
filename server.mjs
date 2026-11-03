@@ -7,9 +7,11 @@
 import http from "node:http";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import puppeteer from "puppeteer-core";
 import sharp from "sharp";
 import { HOME_HTML } from "./home.mjs";
+import { AUDIO_TAP_JS, TONE_HTML, toneWav } from "./audio-tap.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
 const API_KEY = process.env.API_KEY || "";
@@ -17,10 +19,13 @@ const CHROME_PATH = process.env.CHROME_PATH || "/usr/bin/chromium";
 const LOW_MEMORY = process.env.LOW_MEMORY === "1";
 const MAX_SESSIONS = Number(process.env.MAX_SESSIONS || (LOW_MEMORY ? 2 : 5));
 const IDLE_MS = Number(process.env.IDLE_MS || 90_000);
+const COOKIE_FILE = process.env.COOKIE_FILE || "";
 const TILE = 32;
 const HOME = `http://127.0.0.1:${PORT}/home`;
 const LONG_POLL_MS = 350;
 const AFTER_INPUT_MS = 120;
+const AUDIO_BATCH = 3; // ~100 ms of audio frames wakes a waiting /tick
+const TONE_WAV = toneWav();
 
 sharp.concurrency(1);
 sharp.cache(false);
@@ -42,6 +47,7 @@ async function getBrowser() {
       "--mute-audio",
       "--disable-extensions",
       "--disable-background-networking",
+      "--lang=en-US",
       "--disable-site-isolation-trials",
       "--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter",
       "--disable-software-rasterizer",
@@ -82,6 +88,8 @@ async function createSession(w, h) {
   // Sites block "HeadlessChrome"; present as regular desktop Chrome
   const ua = (await b.userAgent()).replace("HeadlessChrome", "Chrome");
   await page.setUserAgent(ua);
+  // The host is in Germany; ask sites for English instead of geo-localized German
+  await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
   const id = crypto.randomUUID();
   const s = {
     id, ctx, page, w, h,
@@ -89,7 +97,14 @@ async function createSession(w, h) {
     cur: null, curSeq: -1, // latest frame decoded to RGB565
     sent: null, sentSeq: -1, // what the Roblox client already has
     waiters: [], lastUsed: Date.now(), busy: Promise.resolve(),
+    audio: [], // pending audio frames (band levels + pitches) from the page tap
   };
+  await page.exposeFunction("__rbxAudio", (b64) => {
+    s.audio.push(Buffer.from(String(b64), "base64"));
+    if (s.audio.length > 30) s.audio.shift(); // nobody is polling; keep only the last second
+    if (s.audio.length >= AUDIO_BATCH) frameWaiters(s);
+  });
+  await page.evaluateOnNewDocument(AUDIO_TAP_JS);
   // Popups open in the same tab so the player never loses the view
   page.on("popup", async (p) => {
     const url = p.url();
@@ -109,9 +124,54 @@ async function createSession(w, h) {
   s.cdp = cdp;
 
   sessions.set(id, s);
+  await restoreSharedCookies(s);
   page.goto(HOME, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
   return s;
 }
+
+// Non-identifying cookies (bot-check pass, consent choice) are shared across sessions so a
+// solved Google captcha or cookie banner stays solved. Login cookies are never shared.
+const SHARED_COOKIES = new Set(["GOOGLE_ABUSE_EXEMPTION", "SOCS", "CONSENT", "NID", "AEC", "PREF", "VISITOR_INFO1_LIVE", "YSC"]);
+const SHARED_DOMAINS = /(^|\.)(google\.[a-z.]+|youtube\.com)$/;
+let sharedCookies = [];
+try {
+  if (COOKIE_FILE) sharedCookies = JSON.parse(fs.readFileSync(COOKIE_FILE, "utf8"));
+} catch {}
+
+async function browserCdp() {
+  const b = await getBrowser();
+  if (!b.__cdp) b.__cdp = await b.target().createCDPSession();
+  return b.__cdp;
+}
+
+async function restoreSharedCookies(s) {
+  const now = Date.now() / 1000;
+  const cookies = sharedCookies.filter((c) => !c.expires || c.expires < 0 || c.expires > now);
+  if (cookies.length === 0) return;
+  const cdp = await browserCdp();
+  await cdp.send("Storage.setCookies", { cookies, browserContextId: s.ctx.id }).catch(() => {});
+}
+
+async function saveSharedCookies(s) {
+  if (!COOKIE_FILE) return;
+  const cdp = await browserCdp();
+  const { cookies } = await cdp.send("Storage.getCookies", { browserContextId: s.ctx.id }).catch(() => ({ cookies: [] }));
+  let changed = false;
+  for (const c of cookies) {
+    if (!SHARED_COOKIES.has(c.name) || !SHARED_DOMAINS.test(c.domain.replace(/^\./, ""))) continue;
+    const keep = { name: c.name, value: c.value, domain: c.domain, path: c.path, expires: c.expires, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite };
+    const i = sharedCookies.findIndex((o) => o.name === c.name && o.domain === c.domain);
+    if (i >= 0 && sharedCookies[i].value === c.value) continue;
+    if (i >= 0) sharedCookies[i] = keep;
+    else sharedCookies.push(keep);
+    changed = true;
+  }
+  if (changed) fs.writeFile(COOKIE_FILE, JSON.stringify(sharedCookies), () => {});
+}
+
+setInterval(() => {
+  for (const s of sessions.values()) saveSharedCookies(s).catch(() => {});
+}, 30_000);
 
 async function closeOldest() {
   let oldest;
@@ -124,6 +184,7 @@ async function closeSession(id) {
   if (!s) return;
   sessions.delete(id);
   frameWaiters(s);
+  await saveSharedCookies(s).catch(() => {});
   await s.ctx.close().catch(() => {});
 }
 
@@ -135,13 +196,15 @@ setInterval(() => {
 function normalizeUrl(raw) {
   const t = String(raw || "").trim();
   if (!t || t.toLowerCase() === "home") return HOME;
+  if (t.toLowerCase() === "sound test") return HOME.replace("/home", "/tone");
   if (/^[a-z]+:\/\//i.test(t)) return t;
   if (/^[^\s]+\.[^\s]{2,}$/.test(t)) return "https://" + t;
-  return "https://www.google.com/search?q=" + encodeURIComponent(t);
+  return "https://www.google.com/search?hl=en&q=" + encodeURIComponent(t);
 }
 
 function publicUrl(url) {
-  return url.startsWith(HOME) ? "" : url;
+  if (url.startsWith(HOME)) return "";
+  return url.startsWith(HOME.replace("/home", "/tone")) ? "sound test" : url;
 }
 
 const KEYS = new Set([
@@ -244,10 +307,16 @@ function diffTiles(s, full) {
 
 async function tick(s, { full, hadInput }) {
   s.lastUsed = Date.now();
-  // Long-poll: answer as soon as Chromium paints something new
-  if (!full && s.seq === s.sentSeq) await waitForFrame(s, hadInput ? AFTER_INPUT_MS : LONG_POLL_MS);
+  // Long-poll: answer as soon as Chromium paints something new or audio has queued up
+  if (!full && s.seq === s.sentSeq && s.audio.length < AUDIO_BATCH) {
+    await waitForFrame(s, hadInput ? AFTER_INPUT_MS : LONG_POLL_MS);
+  }
   const out = { url: publicUrl(s.page.url()), title: "", tiles: 0 };
   out.title = await s.page.title().catch(() => "");
+  if (s.audio.length > 0) {
+    out.audioFrames = s.audio.length;
+    out.audio = Buffer.concat(s.audio.splice(0)).toString("base64");
+  }
   if (!s.png || (!full && s.seq === s.sentSeq)) return out;
   await decodeFrame(s);
   s.sentSeq = s.curSeq;
@@ -283,6 +352,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(HOME_HTML);
+    }
+    if (url.pathname === "/tone") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end(TONE_HTML);
+    }
+    if (url.pathname === "/tone.wav") {
+      res.writeHead(200, { "content-type": "audio/wav" });
+      return res.end(TONE_WAV);
     }
     if (API_KEY && req.headers["x-api-key"] !== API_KEY) return send(res, 401, { error: "unauthorized" });
 
