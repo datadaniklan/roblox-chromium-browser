@@ -3,11 +3,14 @@
 // play raw samples, so the game rebuilds the sound from these with pitch-shifted sine tones.
 export const BANDS = 40;
 export const FRAME_BYTES = BANDS * 3; // per band: u8 level, u16 frequency (Hz)
+export const AUDIO_RATE = 50; // frames per second; the Roblox client plays them back at this rate
 
 export const AUDIO_TAP_JS = `(() => {
   if (window.top !== window || window.__rbxAudioTap) return;
   window.__rbxAudioTap = true;
-  const BANDS = ${BANDS}, MIN_HZ = 60, MAX_HZ = 8000, RATE = 30, FLOOR_DB = -100;
+  const BANDS = ${BANDS}, MIN_HZ = 60, MAX_HZ = 8000, RATE = ${AUDIO_RATE}, FLOOR_DB = -100;
+  // Bands this far below the loudest one are dropped: faint partials only add warble and hiss
+  const GATE_DB = 40;
   let ctx, analyser, data, silentFrames = 0;
   const tapped = new WeakSet();
 
@@ -15,8 +18,10 @@ export const AUDIO_TAP_JS = `(() => {
     if (ctx) return;
     ctx = new AudioContext();
     analyser = ctx.createAnalyser();
-    analyser.fftSize = 4096;
-    analyser.smoothingTimeConstant = 0;
+    // ~43 ms window: reacts twice as fast as 4096 while still resolving low notes
+    analyser.fftSize = 2048;
+    // A little temporal smoothing keeps tones from flickering on and off between frames
+    analyser.smoothingTimeConstant = 0.3;
     analyser.connect(ctx.destination);
     data = new Float32Array(analyser.frequencyBinCount);
     setInterval(sample, 1000 / RATE);
@@ -39,7 +44,9 @@ export const AUDIO_TAP_JS = `(() => {
     const binHz = ctx.sampleRate / analyser.fftSize;
     const out = new Uint8Array(BANDS * 3);
     const usedBins = new Set();
-    let loud = false;
+    const levels = new Float32Array(BANDS);
+    const pitches = new Float32Array(BANDS);
+    let maxDb = FLOOR_DB;
     for (let b = 0; b < BANDS; b++) {
       const lo = MIN_HZ * Math.pow(MAX_HZ / MIN_HZ, b / BANDS);
       const hi = MIN_HZ * Math.pow(MAX_HZ / MIN_HZ, (b + 1) / BANDS);
@@ -64,16 +71,21 @@ export const AUDIO_TAP_JS = `(() => {
         hz = (bi + offset) * binHz;
         db = best;
       }
-      hz = Math.round(Math.max(20, Math.min(20000, hz)));
-      const level = Math.max(0, Math.min(255, Math.round((db - FLOOR_DB) * 2.55)));
-      if (db > -75) loud = true;
-      out[b * 3] = level;
+      levels[b] = db;
+      pitches[b] = Math.round(Math.max(20, Math.min(20000, hz)));
+      if (db > maxDb) maxDb = db;
+    }
+    const loud = maxDb > -75;
+    for (let b = 0; b < BANDS; b++) {
+      const db = levels[b] < maxDb - GATE_DB ? FLOOR_DB : levels[b];
+      const hz = pitches[b];
+      out[b * 3] = Math.max(0, Math.min(255, Math.round((db - FLOOR_DB) * 2.55)));
       out[b * 3 + 1] = hz & 255;
       out[b * 3 + 2] = (hz >> 8) & 255;
     }
     // Keep sending a few silent frames so the game fades out instead of holding the last tone
     silentFrames = loud ? 0 : silentFrames + 1;
-    if (silentFrames > 3) return;
+    if (silentFrames > 5) return;
     let s = "";
     for (let i = 0; i < out.length; i++) s += String.fromCharCode(out[i]);
     window.__rbxAudio(btoa(s));

@@ -12,7 +12,7 @@ import path from "node:path";
 import puppeteer from "puppeteer-core";
 import sharp from "sharp";
 import { homeHtml, searchUrl, ENGINES } from "./home.mjs";
-import { AUDIO_TAP_JS, TONE_HTML, toneWav } from "./audio-tap.mjs";
+import { AUDIO_TAP_JS, AUDIO_RATE, TONE_HTML, toneWav } from "./audio-tap.mjs";
 import { startSocksRouter } from "./socks-router.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -124,7 +124,7 @@ async function createSession(w, h, user) {
   });
   await page.exposeFunction("__rbxAudio", (b64) => {
     s.audio.push(Buffer.from(String(b64), "base64"));
-    if (s.audio.length > 30) s.audio.shift(); // nobody is polling; keep only the last second
+    if (s.audio.length > AUDIO_RATE) s.audio.shift(); // nobody is polling; keep only the last second
     if (s.audio.length >= AUDIO_BATCH) frameWaiters(s);
   });
   await page.evaluateOnNewDocument(AUDIO_TAP_JS);
