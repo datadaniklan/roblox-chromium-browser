@@ -199,7 +199,8 @@ function normalizeUrl(raw) {
   if (t.toLowerCase() === "sound test") return HOME.replace("/home", "/tone");
   if (/^[a-z]+:\/\//i.test(t)) return t;
   if (/^[^\s]+\.[^\s]{2,}$/.test(t)) return "https://" + t;
-  return "https://www.google.com/search?hl=en&q=" + encodeURIComponent(t);
+  // Google captchas every search from datacenter IPs; DuckDuckGo doesn't
+  return "https://duckduckgo.com/?kl=us-en&q=" + encodeURIComponent(t);
 }
 
 function publicUrl(url) {

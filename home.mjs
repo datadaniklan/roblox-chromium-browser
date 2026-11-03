@@ -81,10 +81,10 @@ export const HOME_HTML = `<!doctype html>
 <body>
 <div class="clouds"></div>
 <main>
-  <form action="https://www.google.com/search" method="get">
-    <input type="hidden" name="hl" value="en">
+  <form action="https://duckduckgo.com/" method="get">
+    <input type="hidden" name="kl" value="us-en">
     <label class="search">
-      <img src="https://www.google.com/s2/favicons?domain=google.com&sz=64" alt="">
+      <img src="https://www.google.com/s2/favicons?domain=duckduckgo.com&sz=64" alt="">
       <input name="q" placeholder="Search the web" autocomplete="off" autofocus>
     </label>
   </form>
