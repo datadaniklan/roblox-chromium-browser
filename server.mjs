@@ -24,6 +24,21 @@ const COOKIE_FILE = process.env.COOKIE_FILE || "";
 // SHARE_LOGIN=1 also shares Google/YouTube login cookies, so one (throwaway) account signed in
 // once is signed in for every player. Anyone in the game can then use that account.
 const SHARE_LOGIN = process.env.SHARE_LOGIN === "1";
+// PROXY_SOCKS=host:port sends Google/YouTube traffic through a SOCKS proxy (e.g. a reverse SSH
+// tunnel to a home connection), because they bot-wall datacenter IPs. Falls back to direct
+// whenever the proxy is down; every other site always goes direct.
+const PROXY_SOCKS = process.env.PROXY_SOCKS || "";
+const PROXIED_DOMAINS = [
+  "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "ggpht.com",
+  "google.com", "google.de", "gstatic.com", "googleapis.com", "googleusercontent.com", "recaptcha.net",
+];
+const PROXY_PAC = `function FindProxyForURL(url, host) {
+  var domains = ${JSON.stringify(PROXIED_DOMAINS)};
+  for (var i = 0; i < domains.length; i++) {
+    if (host === domains[i] || dnsDomainIs(host, "." + domains[i])) return "SOCKS5 ${PROXY_SOCKS}; DIRECT";
+  }
+  return "DIRECT";
+}`;
 const TILE = 32;
 const HOME = `http://127.0.0.1:${PORT}/home`;
 const LONG_POLL_MS = 350;
@@ -52,6 +67,7 @@ async function getBrowser() {
       "--disable-extensions",
       "--disable-background-networking",
       "--lang=en-US",
+      ...(PROXY_SOCKS ? [`--proxy-pac-url=http://127.0.0.1:${PORT}/proxy.pac`] : []),
       "--disable-site-isolation-trials",
       "--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter",
       "--disable-software-rasterizer",
@@ -399,6 +415,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/home") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(homeHtml(ENGINES[url.searchParams.get("e")] ? url.searchParams.get("e") : "duckduckgo"));
+    }
+    if (url.pathname === "/proxy.pac") {
+      res.writeHead(200, { "content-type": "application/x-ns-proxy-autoconfig" });
+      return res.end(PROXY_PAC);
     }
     if (url.pathname === "/tone") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
