@@ -8,6 +8,7 @@ import http from "node:http";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import puppeteer from "puppeteer-core";
 import sharp from "sharp";
 import { homeHtml, searchUrl, ENGINES } from "./home.mjs";
@@ -82,7 +83,7 @@ function waitForFrame(s, ms) {
   });
 }
 
-async function createSession(w, h) {
+async function createSession(w, h, user) {
   if (sessions.size >= MAX_SESSIONS) await closeOldest();
   const b = await getBrowser();
   const ctx = await b.createBrowserContext();
@@ -96,6 +97,7 @@ async function createSession(w, h) {
   const id = crypto.randomUUID();
   const s = {
     id, ctx, page, w, h,
+    user, // Roblox UserId whose cookie jar this session loads and saves (none for the cinema)
     png: null, seq: 0, // latest screencast frame
     cur: null, curSeq: -1, // latest frame decoded to RGB565
     sent: null, sentSeq: -1, // what the Roblox client already has
@@ -131,19 +133,46 @@ async function createSession(w, h) {
   s.cdp = cdp;
 
   sessions.set(id, s);
-  await restoreSharedCookies(s);
+  await restoreCookies(s);
   page.goto(HOME, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
   return s;
 }
 
-// Non-identifying cookies (bot-check pass, consent choice) are shared across sessions so a
-// solved Google captcha or cookie banner stays solved. Login cookies are only shared with SHARE_LOGIN.
+// Cookies are kept in two jars on disk:
+// - shared: non-identifying Google/YouTube cookies (captcha pass, consent choice), plus their login
+//   cookies when SHARE_LOGIN is on, so every session starts past those walls;
+// - per player: everything else, keyed by Roblox UserId, so a player's own logins follow them
+//   across sessions and game servers without anyone else getting them.
 const SHARED_COOKIES = new Set(["GOOGLE_ABUSE_EXEMPTION", "SOCS", "CONSENT", "NID", "AEC", "PREF", "VISITOR_INFO1_LIVE", "YSC"]);
 const SHARED_DOMAINS = /(^|\.)(google\.[a-z.]+|youtube\.com)$/;
+const PLAYER_DIR = COOKIE_FILE ? path.join(path.dirname(COOKIE_FILE), "players") : "";
+const MAX_PLAYER_COOKIES = 3000;
 let sharedCookies = [];
 try {
   if (COOKIE_FILE) sharedCookies = JSON.parse(fs.readFileSync(COOKIE_FILE, "utf8"));
 } catch {}
+if (PLAYER_DIR) fs.mkdirSync(PLAYER_DIR, { recursive: true });
+
+function isShared(c) {
+  return SHARED_DOMAINS.test(c.domain.replace(/^\./, "")) && (SHARE_LOGIN || SHARED_COOKIES.has(c.name));
+}
+
+function toParam(c) {
+  const keep = { name: c.name, value: c.value, domain: c.domain, path: c.path, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite };
+  // Session cookies (expires -1) are kept as-is so logins that use them survive too
+  if (c.expires > 0) keep.expires = c.expires;
+  return keep;
+}
+
+const playerFile = (user) => path.join(PLAYER_DIR, `${user}.json`);
+
+function readJar(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return [];
+  }
+}
 
 async function browserCdp() {
   const b = await getBrowser();
@@ -151,34 +180,44 @@ async function browserCdp() {
   return b.__cdp;
 }
 
-async function restoreSharedCookies(s) {
+async function restoreCookies(s) {
   const now = Date.now() / 1000;
-  const cookies = sharedCookies.filter((c) => !c.expires || c.expires < 0 || c.expires > now);
+  const fresh = (c) => !c.expires || c.expires < 0 || c.expires > now;
+  const cookies = [...(s.user && PLAYER_DIR ? readJar(playerFile(s.user)) : []), ...sharedCookies].filter(fresh);
   if (cookies.length === 0) return;
   const cdp = await browserCdp();
   await cdp.send("Storage.setCookies", { cookies, browserContextId: s.ctx.id }).catch(() => {});
 }
 
-async function saveSharedCookies(s) {
+async function saveCookies(s) {
   if (!COOKIE_FILE) return;
   const cdp = await browserCdp();
   const { cookies } = await cdp.send("Storage.getCookies", { browserContextId: s.ctx.id }).catch(() => ({ cookies: [] }));
-  let changed = false;
+  let sharedChanged = false;
+  const mine = [];
   for (const c of cookies) {
-    if (!SHARED_DOMAINS.test(c.domain.replace(/^\./, ""))) continue;
-    if (!SHARE_LOGIN && !SHARED_COOKIES.has(c.name)) continue;
-    const keep = { name: c.name, value: c.value, domain: c.domain, path: c.path, expires: c.expires, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite };
+    if (!isShared(c)) {
+      mine.push(toParam(c));
+      continue;
+    }
     const i = sharedCookies.findIndex((o) => o.name === c.name && o.domain === c.domain);
     if (i >= 0 && sharedCookies[i].value === c.value) continue;
-    if (i >= 0) sharedCookies[i] = keep;
-    else sharedCookies.push(keep);
-    changed = true;
+    if (i >= 0) sharedCookies[i] = toParam(c);
+    else sharedCookies.push(toParam(c));
+    sharedChanged = true;
   }
-  if (changed) fs.writeFile(COOKIE_FILE, JSON.stringify(sharedCookies), () => {});
+  if (sharedChanged) fs.writeFile(COOKIE_FILE, JSON.stringify(sharedCookies), () => {});
+  if (s.user && PLAYER_DIR) {
+    const json = JSON.stringify(mine.slice(-MAX_PLAYER_COOKIES));
+    if (json !== s.savedJar) {
+      s.savedJar = json;
+      fs.writeFile(playerFile(s.user), json, { mode: 0o600 }, () => {});
+    }
+  }
 }
 
 setInterval(() => {
-  for (const s of sessions.values()) saveSharedCookies(s).catch(() => {});
+  for (const s of sessions.values()) saveCookies(s).catch(() => {});
 }, 30_000);
 
 async function closeOldest() {
@@ -192,7 +231,7 @@ async function closeSession(id) {
   if (!s) return;
   sessions.delete(id);
   frameWaiters(s);
-  await saveSharedCookies(s).catch(() => {});
+  await saveCookies(s).catch(() => {});
   await s.ctx.close().catch(() => {});
 }
 
@@ -375,7 +414,9 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const w = Math.max(320, Math.min(1024, body.w | 0 || 1024));
       const h = Math.max(240, Math.min(1024, body.h | 0 || 576));
-      const s = await createSession(w, h);
+      // Roblox UserIds are numeric; anything else gets no saved cookies
+      const user = /^\d{1,20}$/.test(String(body.user ?? "")) ? String(body.user) : undefined;
+      const s = await createSession(w, h, user);
       return send(res, 200, { id: s.id, w, h });
     }
 
