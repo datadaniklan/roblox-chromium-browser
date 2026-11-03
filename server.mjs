@@ -11,8 +11,8 @@ import { PNG } from "pngjs";
 const PORT = Number(process.env.PORT || 10000);
 const API_KEY = process.env.API_KEY || "";
 const CHROME_PATH = process.env.CHROME_PATH || "/usr/bin/chromium";
-const MAX_SESSIONS = Number(process.env.MAX_SESSIONS || 4);
-const IDLE_MS = Number(process.env.IDLE_MS || 120_000);
+const MAX_SESSIONS = Number(process.env.MAX_SESSIONS || 2);
+const IDLE_MS = Number(process.env.IDLE_MS || 60_000);
 const TILE = 32;
 const HOME = "https://www.google.com";
 
@@ -32,7 +32,13 @@ async function getBrowser() {
       "--mute-audio",
       "--disable-extensions",
       "--disable-background-networking",
-      "--js-flags=--max-old-space-size=192",
+      // Keep Chromium inside Render's 512 MB free tier: one shared renderer, no site isolation
+      "--renderer-process-limit=1",
+      "--disable-site-isolation-trials",
+      "--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter",
+      "--disable-software-rasterizer",
+      "--autoplay-policy=user-gesture-required",
+      "--js-flags=--max-old-space-size=128",
     ],
   });
   browser.on("disconnected", () => sessions.clear());
