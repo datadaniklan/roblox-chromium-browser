@@ -20,6 +20,9 @@ const LOW_MEMORY = process.env.LOW_MEMORY === "1";
 const MAX_SESSIONS = Number(process.env.MAX_SESSIONS || (LOW_MEMORY ? 2 : 5));
 const IDLE_MS = Number(process.env.IDLE_MS || 90_000);
 const COOKIE_FILE = process.env.COOKIE_FILE || "";
+// SHARE_LOGIN=1 also shares Google/YouTube login cookies, so one (throwaway) account signed in
+// once is signed in for every player. Anyone in the game can then use that account.
+const SHARE_LOGIN = process.env.SHARE_LOGIN === "1";
 const TILE = 32;
 const HOME = `http://127.0.0.1:${PORT}/home`;
 const LONG_POLL_MS = 350;
@@ -134,7 +137,7 @@ async function createSession(w, h) {
 }
 
 // Non-identifying cookies (bot-check pass, consent choice) are shared across sessions so a
-// solved Google captcha or cookie banner stays solved. Login cookies are never shared.
+// solved Google captcha or cookie banner stays solved. Login cookies are only shared with SHARE_LOGIN.
 const SHARED_COOKIES = new Set(["GOOGLE_ABUSE_EXEMPTION", "SOCS", "CONSENT", "NID", "AEC", "PREF", "VISITOR_INFO1_LIVE", "YSC"]);
 const SHARED_DOMAINS = /(^|\.)(google\.[a-z.]+|youtube\.com)$/;
 let sharedCookies = [];
@@ -162,7 +165,8 @@ async function saveSharedCookies(s) {
   const { cookies } = await cdp.send("Storage.getCookies", { browserContextId: s.ctx.id }).catch(() => ({ cookies: [] }));
   let changed = false;
   for (const c of cookies) {
-    if (!SHARED_COOKIES.has(c.name) || !SHARED_DOMAINS.test(c.domain.replace(/^\./, ""))) continue;
+    if (!SHARED_DOMAINS.test(c.domain.replace(/^\./, ""))) continue;
+    if (!SHARE_LOGIN && !SHARED_COOKIES.has(c.name)) continue;
     const keep = { name: c.name, value: c.value, domain: c.domain, path: c.path, expires: c.expires, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite };
     const i = sharedCookies.findIndex((o) => o.name === c.name && o.domain === c.domain);
     if (i >= 0 && sharedCookies[i].value === c.value) continue;
